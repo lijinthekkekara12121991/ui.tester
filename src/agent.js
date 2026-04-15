@@ -10,7 +10,7 @@ const __dirname = path.dirname(__filename);
 const PROJECT_ROOT = path.resolve(__dirname, "..");
 const RESULTS_DIR = path.join(PROJECT_ROOT, "test-results");
 const DEFAULT_OLLAMA_URL = process.env.OLLAMA_URL ?? "http://127.0.0.1:11434";
-const DEFAULT_OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "glm-5:cloud";
+const DEFAULT_OLLAMA_MODEL = process.env.OLLAMA_MODEL ?? "glm-4.6:cloud";
 const DEFAULT_MCP_COMMAND = process.env.PLAYWRIGHT_MCP_COMMAND ?? "npx";
 const DEFAULT_MCP_ARGS = splitArgs(
   process.env.PLAYWRIGHT_MCP_ARGS ?? "@playwright/mcp"
@@ -322,22 +322,72 @@ function inferStepStatus(result) {
 
 function inferOverallStatus(summary, visibleSteps) {
   const normalizedSummary = String(summary ?? "").toLowerCase();
+  const hasPositiveOutcome = hasSuccessSignal(normalizedSummary);
+  const hasNegativeOutcome = hasFailureSignal(normalizedSummary);
+  const failedSteps = visibleSteps.filter((step) => step.status === "failed");
 
-  if (
-    normalizedSummary.includes("drift") ||
-    normalizedSummary.includes("forbidden") ||
-    normalizedSummary.includes("could not") ||
-    normalizedSummary.includes("unable to") ||
-    normalizedSummary.includes("failed to")
-  ) {
+  if (visibleSteps.length === 0) {
+    return "incomplete";
+  }
+
+  if (hasNegativeOutcome && !hasPositiveOutcome) {
     return "failed";
   }
 
-  if (visibleSteps.some((step) => step.status === "failed")) {
+  if (failedSteps.length === 0) {
+    return "passed";
+  }
+
+  if (hasPositiveOutcome && hasRecoveryAfterLastFailure(visibleSteps)) {
+    return "passed";
+  }
+
+  if (hasPositiveOutcome) {
+    return "incomplete";
+  }
+
+  if (failedSteps.length > 0) {
     return "failed";
   }
 
-  return visibleSteps.length > 0 ? "passed" : "incomplete";
+  return "passed";
+}
+
+function hasSuccessSignal(summary) {
+  return (
+    summary.includes("success") ||
+    summary.includes("successfully") ||
+    summary.includes("completed") ||
+    summary.includes("passed") ||
+    summary.includes("can be added") ||
+    summary.includes("works") ||
+    summary.includes("✅")
+  );
+}
+
+function hasFailureSignal(summary) {
+  return (
+    summary.includes("drift") ||
+    summary.includes("forbidden") ||
+    summary.includes("unable to") ||
+    summary.includes("failed to") ||
+    summary.includes("test failed") ||
+    summary.includes("did not") ||
+    summary.includes("cannot")
+  );
+}
+
+function hasRecoveryAfterLastFailure(visibleSteps) {
+  const lastFailedIndex = visibleSteps.reduce(
+    (index, step, currentIndex) => (step.status === "failed" ? currentIndex : index),
+    -1
+  );
+
+  if (lastFailedIndex < 0) {
+    return false;
+  }
+
+  return visibleSteps.slice(lastFailedIndex + 1).some((step) => step.status === "passed");
 }
 
 async function saveUiTestResult(resultPayload) {
